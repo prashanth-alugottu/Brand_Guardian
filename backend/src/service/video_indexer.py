@@ -14,11 +14,11 @@ logger = logging.getLogger("video-indexer")
 
 class VideoIndexerService:
     def __init__(self):
-        self.account_id = os.genenv("AZURE_VI_ACCOUNT_ID")
-        self.location = os.genenv("AZURE_VI_LOCATION")
-        self.subscription_id = os.genenv("AZURE_SUBSCRIPTION_ID")
-        self.resource_group = os.genenv("AZURE_RESOURCE_GROUP")
-        self.vi_name  = os.genenv("AZURE_VI_NAME","")
+        self.account_id = os.getenv("AZURE_VI_ACCOUNT_ID")
+        self.location = os.getenv("AZURE_VI_LOCATION")
+        self.subscription_id = os.getenv("AZURE_SUBSCRIPTION_ID")
+        self.resource_group = os.getenv("AZURE_RESOURCE_GROUP")
+        self.vi_name  = os.getenv("AZURE_VI_NAME","bg-ai-video-indexer")
         self.credential  = DefaultAzureCredential()
 
     def get_access_token(self):
@@ -27,7 +27,7 @@ class VideoIndexerService:
         '''
         try:
             token_object = self.credential.get_token("https://management.azure.com/.default")
-            return token_object
+            return token_object.token
         except Exception as e:
             logger.error(f"Failed to get Azure token : {e}")
 
@@ -58,11 +58,15 @@ class VideoIndexerService:
         logger.info(f"Downloading Youtube video : {url}")
         
         ydl_opts = {
-            "format" : 'best[ext=mp4]',
-            'outtmpl' : output_path,
-            'quiet' : True,
-            'overwrites' : True
-        }
+            'format': 'best',
+            'outtmpl': output_path, # output template
+            'quiet': False,
+            'no_warnings': False,
+                # Add these options:
+            'extractor_args': {'youtube': {'player_client': ['android', 'web']}},
+            'http_headers': {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+            }
 
         try:
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -73,7 +77,7 @@ class VideoIndexerService:
             raise Exception(f"Youtube Video Download Failed : {str(e)}")
 
     # Upload the video to Azure Video indexer
-    def upload_vide(self, video_path, video_name) :
+    def upload_video(self, video_path, video_name) :
         arm_token = self.get_access_token()
         vi_token = self.get_account_token(arm_token)
         api_url = f"https://api.videoindexer.ai/{self.location}/Accounts/{self.account_id}/Videos"
@@ -94,13 +98,15 @@ class VideoIndexerService:
         if response. status_code != 200:
             raise Exception(f"Azure Upload Failed : {response.text}")
         
+        return response.json().get("id")
+        
     def wait_for_processing(self,video_id):
         logger.info(f"Waiting for the video {video_id} to process")
         while True:
-            arm_token = self.get_account_token()
+            arm_token = self.get_access_token()
             vi_token = self.get_account_token(arm_token)
 
-            url = f"https://api.videoindexer.ai/{self.location}/Accounts/{self.account_id}/Videos"
+            url = f"https://api.videoindexer.ai/{self.location}/Accounts/{self.account_id}/Videos/{video_id}/Index"
             params = {"accessToken":vi_token}
             response = requests.get(url,params=params)
             data = response.json()
@@ -114,24 +120,29 @@ class VideoIndexerService:
                 raise Exception(f"Video Quarantined (Copyright/ Content Policy Violation)")
             logger.info(f"Status {state} .........waiting 30s")
             time.sleep(30)
-
-    def extract_data(self,vi_json) :
-        '''parses teh JSON into our state format'''
+    
+    def extract_data(self, vi_json):
         transcript_lines = []
-        for v in vi_json.get("videos", []) :
-            for insight in v.get("insights", {}).get("transcript", []):
-                transcript_lines.append(insight.get("text"))
+
+        # 1️⃣ summarizedInsights (most common)
+        for t in vi_json.get("summarizedInsights", {}).get("transcript", []):
+            transcript_lines.append(t.get("text", ""))
+
+        # 2️⃣ fallback insights
+        for v in vi_json.get("videos", []):
+            for t in v.get("insights", {}).get("transcript", []):
+                transcript_lines.append(t.get("text", ""))
 
         ocr_lines = []
         for v in vi_json.get("videos", []):
-            for insight in v.get("insights",{}).get("ocr",[]):
-                ocr_lines.append(insight.get("text"))
+            for o in v.get("insights", {}).get("ocr", []):
+                ocr_lines.append(o.get("text", ""))
 
         return {
-            "transcipts" : " ".join(transcript_lines),
-            "ocr_text" : ocr_lines,
-            "video_metadata" : {
-                "duration" : vi_json.get("summarizedInsights",{}).get("duration"),
-                "platform" : "youtube"
+            "transcript": " ".join(transcript_lines).strip(),
+            "ocr_text": ocr_lines,
+            "video_metadata": {
+                "duration": vi_json.get("summarizedInsights", {}).get("duration", {}).get("seconds"),
+                "platform": "youtube"
             }
         }
