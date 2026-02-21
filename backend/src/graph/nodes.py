@@ -37,7 +37,7 @@ def index_video_node(state : VideoAuditState) -> Dict[str,Any]:
     try:
         vi_service = VideoIndexerService()
         #download
-        if "youtube.com" in video_url or "youtube.be" in video_url:
+        if "youtube.com" in video_url or "youtube.be" in video_url or "youtu.be" in video_url:
             local_path=vi_service.download_youtube_video(video_url,output_path=local_filename)
         else:
             raise Exception("Please provide a valid youtube URL for this test.")
@@ -62,7 +62,7 @@ def index_video_node(state : VideoAuditState) -> Dict[str,Any]:
         return {
             "errors" : [str(e)],
             "final_status": "FAIL",
-            "transcript":" ",
+            "transcript":"",
             "ocr_text":[]
         }
 
@@ -73,6 +73,7 @@ def audit_content_node(state:VideoAuditState) -> Dict[str,Any]:
     '''
     logger.info(f"-----[Node: Auditor] quering the knowledge base & LLM")
     transcript = state.get("transcript","")
+    logger.info(f"=======>>>> Here is the transcripts :{repr(transcript)}")
     if not transcript:
         logger.warning(f"No transcript available. Skipping audit....")
         return {
@@ -82,13 +83,13 @@ def audit_content_node(state:VideoAuditState) -> Dict[str,Any]:
 
     # initialise the azure services
     llm = AzureChatOpenAI(
-        azure_deployement = os.getenv("AZURE_OPENAI_CHAT_DEPLOYMENT"),
+        azure_deployment = os.getenv("AZURE_OPENAI_CHAT_DEPLOYMENT"),
         openai_api_version = os.getenv("AZURE_OPENAI_API_VERSION"),
         temperature = 0.0
     )
 
     embeddings = AzureOpenAIEmbeddings(
-        azure_deployement = os.genenv("AZURE_OPENAI_EMBEDDING_DEPLOYMENT"),
+        azure_deployment = os.getenv("AZURE_OPENAI_EMBEDDING_DEPLOYMENT"),
         openai_api_version = os.getenv("AZURE_OPENAI_API_VERSION"),
     )
 
@@ -144,6 +145,7 @@ def audit_content_node(state:VideoAuditState) -> Dict[str,Any]:
             HumanMessage(content=user_message)
         ])
         content =  response.content
+        logger.info(f"========>>> content : {content}")
         if "```" in content:
             content = re.search(r"```(?:json)?(.?)```",content,re.DOTALL).group(1)
 
@@ -153,12 +155,11 @@ def audit_content_node(state:VideoAuditState) -> Dict[str,Any]:
             "final_status" : audit_data.get("status","FAIL"),
             "final_report" : audit_data.get("final_report","No report generated")
         }
-    
     except Exception as e:
         logger.error(f"System Error in Auditor Node : {str(e)}")
         # logging the raw response 
         logger.error(f"Raw LLM response : {response.content if 'response' in locals() else None}")
         return {
-            "erroes" : [str(e)],
+            "errors" : [str(e)],
             "final_status" : "FAIL"
         }
